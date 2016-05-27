@@ -1,0 +1,74 @@
+		
+void IMU()
+{		
+		1)
+		/* v techto promennych mame raw data z gyra a filtrovana LPF akcelerometr data*/
+		GyroXYZ[0];
+		GyroXYZ[1];
+		GyroXYZ[2];
+		accSmooth[0]=filterApplyPt1((float)AccXYZ[0],&Filters[ACC_X],20,dt);
+		accSmooth[1]=filterApplyPt1((float)AccXYZ[1],&Filters[ACC_Y],20,dt);
+		accSmooth[2]=filterApplyPt1((float)AccXYZ[2],&Filters[ACC_Z],20,dt);
+				
+		2)
+		/* vypocitam pomoci gyra uhel natoceni (uhel o ktery se to  pohlo od minuleho mereni)*/
+		/* zaroven spocitam hodnotu akcelerometru jestli se vejdeme do 72% až 133% z 1G*/
+		accMag=0;
+		for (uint8_t axis=0;axis<3;axis++)
+		{
+			deltaGyroAngle[axis] = GyroXYZ[axis] * scale*dt;	//pøepoèet na uhel ve stupnich
+			accMag += (float)accSmooth[axis] * accSmooth[axis];	//pocitani celkoveho zrychleni
+		}
+		accMag = (float) (accMag / (acc_1G*acc_1G)); //should be  equal to 1 =1G
+		
+		3)
+		/*prepocitam body fram to wolrd frame pomoci DCM - funkce rotateV je nize - z baseflight*/
+		rotateV(&EstiG.V, deltaGyroAngle);
+		
+		4) /*? pak se ztracim a nevim co dal*/
+		/*potrebuuju ziskat eulerovy uhly guadra roll pitch yaw (zatim bez magnetometru)*/
+		/*a zaroven zrychleni bez gravitace alespon v ose Z  pro odhad vysky (dvojta integrace zrychleni)...*/
+		
+		
+}		
+		
+		
+		
+		
+// Rotate Estimated vector(s) with small angle approximation, according to the gyro data
+void rotateV(struct fp_vector *v, float *delta)
+{
+	struct fp_vector v_tmp = *v;
+
+	// This does a  "proper" matrix rotation using gyro deltas without small-angle approximation
+	float mat[3][3];
+	float cosx, sinx, cosy, siny, cosz, sinz;
+	float coszcosx, sinzcosx, coszsinx, sinzsinx;
+
+	cosx = cosf(delta[0]);
+	sinx = sinf(delta[0]);
+	cosy = cosf(delta[1]);
+	siny = sinf(delta[1]);
+	cosz = cosf(delta[2]);
+	sinz = sinf(delta[2]);
+
+	coszcosx = cosz * cosx;
+	sinzcosx = sinz * cosx;
+	coszsinx = sinx * cosz;
+	sinzsinx = sinx * sinz;
+
+	mat[0][0] = cosz * cosy;
+	mat[0][1] = -cosy * sinz;
+	mat[0][2] = siny;
+	mat[1][0] = sinzcosx + (coszsinx * siny);
+	mat[1][1] = coszcosx - (sinzsinx * siny);
+	mat[1][2] = -sinx * cosy;
+	mat[2][0] = (sinzsinx) - (coszcosx * siny);
+	mat[2][1] = (coszsinx) + (sinzcosx * siny);
+	mat[2][2] = cosy * cosx;
+	
+	/* compute a new value of x,y,z, by previous x,y,z and rotation matrix*/
+	v->X = v_tmp.X * mat[0][0] + v_tmp.Y * mat[1][0] + v_tmp.Z * mat[2][0];
+	v->Y = v_tmp.X * mat[0][1] + v_tmp.Y * mat[1][1] + v_tmp.Z * mat[2][1];
+	v->Z = v_tmp.X * mat[0][2] + v_tmp.Y * mat[1][2] + v_tmp.Z * mat[2][2];
+}
