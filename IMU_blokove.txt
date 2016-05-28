@@ -1,40 +1,76 @@
-		
+	
+	(jeste to nemam hotove, zkusim pokracovat pozdeji)
+	
 void IMU()
 {		
-		1)
-		/* v techto promennych mame raw data z gyra a filtrovana LPF akcelerometr data*/
-		GyroXYZ[0];
-		GyroXYZ[1];
-		GyroXYZ[2];
-		accSmooth[0]=filterApplyPt1((float)AccXYZ[0],&Filters[ACC_X],20,dt);
-		accSmooth[1]=filterApplyPt1((float)AccXYZ[1],&Filters[ACC_Y],20,dt);
-		accSmooth[2]=filterApplyPt1((float)AccXYZ[2],&Filters[ACC_Z],20,dt);
-				
-		2)
-		/* vypocitam pomoci gyra uhel natoceni (uhel o ktery se to  pohlo od minuleho mereni)*/
-		/* zaroven spocitam hodnotu akcelerometru jestli se vejdeme do 72% až 133% z 1G*/
-		accMag=0;
-		for (uint8_t axis=0;axis<3;axis++)
-		{
-			deltaGyroAngle[axis] = GyroXYZ[axis] * scale*dt;	//pøepoèet na uhel ve stupnich
-			accMag += (float)accSmooth[axis] * accSmooth[axis];	//pocitani celkoveho zrychleni
-		}
-		accMag = (float) (accMag / (acc_1G*acc_1G)); //should be  equal to 1 =1G
+	1)
+	/* pozice v prostoru - rotace, ktera transformuje globalni souradnice na lokalni
+            Pro reprezentaci rotace je pouzit quaternion (ale neni to nutne)
+	    Vychozi hodnota neni prilis dulezita, ale predpokladejme, ze quad lezi vodorovne smerem na sever 
+	 	(globalni a lokalni souradnice jsou na pocatku schodne)
+	*/
+	static Quat R = {0,0,0,1};  // za zacatku zadna rotace, reprezentace x,y,z,w
 		
-		3)
-		/*prepocitam body fram to wolrd frame pomoci DCM - funkce rotateV je nize - z baseflight*/
-		rotateV(&EstiG.V, deltaGyroAngle);
+	// u funkci ReadGyro, readAcc predpokladam, ze vraci uz normalizovane mereni (rad/s , m/s^2)
+	Vec3 GyroXYZ = readGyro(); // vektor s uhlovou rychlosti pro jednotlive osy (v lokalnich souradnicich)
+				   // smer je osa rotace, vekost vektoru rychlost otaceni
+	Vec3 AccXYZ = readAcc();   // vektor se zmerenou akcelerace, v lokalnich souradnicich
 		
-		4) /*? pak se ztracim a nevim co dal*/
-		/*potrebuuju ziskat eulerovy uhly guadra roll pitch yaw (zatim bez magnetometru)*/
-		/*a zaroven zrychleni bez gravitace alespon v ose Z  pro odhad vysky (dvojta integrace zrychleni)...*/
+	// accSmooth je trochu sporne 
+	//  - filter zanese do mereni zpozdeni. Pokud by quad trvale rotoval kolem jedne osy, tak se toto zpozdeni projevi
+	//     jako konstantni odchylka
+	//  - je otazka, zda filtrovani ma nejaky pozitivni efekt (krome vyhodnocovani, zda vzorek pouzit)
+	//  - rozhodne zde nefiltrovat moc
+	Vec3 accSmooth = filter(AccXYZ, accFilterState, dT);
 		
+	/* znam rychlost otaceni pro jednotlive osy (GyroXYZ) a dobu od posledniho mereni (dT), tuto zmenu potrebuji
+	     'pridat' do rotace R. Vlastne potrebuji uhlove rychlosti integrovat, ale prinejmensim matematicky neni 
+	     jednoduche (pokud jsem to pochopil, tak to souvisi s tim, ze se v prubehu rotace meni i souradny system
+	      ve kterem je rotace vydrena. Resit se to da, ale tady je to zbytecne)
+	   Pokud budu predpokladat, ze casovy krok (dT) je maly a goniometricke funkce nahradime linearni aproximaci,
+	   muzeme GyroXYZ prevest na rotaci a tou otocit R: */
+	// *** <1> ***
+	Quat gyroQ = {GyroXYZ / 2 * dT, 1}; // quaternion x,y,z,1 ; 
+		// 2 je proto, ze quaternion otaci o 2x theta (linearni aproximace sin)
+		// gyro bylo v rad/s, upravime na cas rotaci mezi samply (dT)
+		// 1 je aproximace cos(theta), predpokladame velmi maly uhel, normalizace vysledku to zachrani
+	
+	R = quat_mult(R, gyroQ);       // otocime orientaci o gyroQ
+	
+	// pokud by nedochazelo k chybam (mereni, zaokrouhlovani,aproximace), R by ted byla orientace v prostoru
+	// problem je, ze chyby se budou akumulovat - je treba je odstranit
 		
-}		
+	// odstraneni chyby pomoci ACC
+	accMag=vec_norm(accSmooth);   // velikost vektoru
+	// ignorovani mereni, ktere jsou prilis daleko od klidoveho stavu - akceleraci zpusobuje pilot a ne gravitace
+	if(accMag > 0.7 * g && accMag < 1.3 * g)  {
+		// vezmu gravitacni vektor a otocim ho do lokalnich souradnic ( je to snazsi nez otacet mereni )
+		Vec3 gravity = {0,0,1};  // NED - gravitace smeruje ve smeru Z, chci jednotkovy vektor
+		Vec3 gLoc = vec_rotate(R, gravity);
+		// pokud by bylo vse vporadku, tak se budou gLoc a accSmooth stejne.
+		// potrebuju najit odchylku mezi temito vektory 
+		// pouziju vektorovy soucin (cross product) - smer vysledneho vektoru je kolmy na oba nasobene vektory
+		//  a velikost je sin(alpha) - vlastne ziskam osu otaceni a uhel, pomoci ktereho muzu vektory 'srovnat'
+		Vec3 accErr = cross(vec_normalize(accSmooth), gLoc);
+		// (accErr by mela byt v klidovem stavu mala)
+			
+		// chybu od akcelerometru vynasobit 'ziskem' - vlastne P regulator, kterym opravuji chybu R
+		// (v tomto miste muzu pouzit i PI regulator - I slozka bude kompenzovat offset gyra)
+			
+		accErr *= accGain;
+			
+		// ted muzu z accErr vytvorit quaternion a pomoci toho opravit R(stejne jako pro signal gyra). 
+		// Ale accErr ma stejny format jako signal z gyra - smer udava osu otaceni, velikot se umerna uhlu.
+		// Navic accGain je maly (chci maly vliv Acc, aby poloha nereagovala na zrychleni zpusobena pilotem).
+		// - muzu si to zjednodusit - accErr prictu k GyroXYZ (v miste <1>) a rotaci provedu jen jednou.
+		<- <1>
+		GyroXYZ += accErr;
+		....
+	}
+	v pripade magnetometru muzu postupovat podobne - otocim smer magnetickeho vektoru (pozor ze nemiri na sever vodorovne, ale v Cechach ma sklon 63Â°) a vypoctu odchylku.
+	Problem je, ze tento vypocet by mi ovlivnoval i uhly naklonu a pri presnosti magnetometru by to zpusobovalo velkou chybu v odhadu orientace (i stupen je pro naklon velka chyba). Proto to Cleanflight dela opacne - zmereny magneticky vektor se otoci do svetovych souradnic a Z se vynuluje - zustane jen hodnota v rovine sever-vychod. Z totoho smeru vypoctu odchylu od osy X (sever), pokud pouziju vektorovy soucin, vyjde mi vektor velokosti odpovidajici chybe, ktery ma jen slozku Z (musi byt kolmy na rovinu XY). Tento vektor otozim zpet do lokalnich souradnic a pouziju stejne jako ACC ke korekci chyby.
 		
-		
-		
-		
+	
 // Rotate Estimated vector(s) with small angle approximation, according to the gyro data
 void rotateV(struct fp_vector *v, float *delta)
 {
