@@ -1,0 +1,72 @@
+
+{				
+			/*propocet prirustku uhlu za dobu dt*/		
+			accMag=0;
+			for (uint8_t axis=0;axis<3;axis++)
+			{
+				deltaGyroAngle[axis] = GyroXYZ[axis] * scale*dt;
+				accMag += (float)accSmooth[axis] * accSmooth[axis];
+			}
+			accMag = (float) (accMag / (acc_1G*acc_1G)); //should be  equal to 1 =1G
+		
+			*/zde rotujeme pomoci namerenych uhlu z gyra a zaroven vypocteme vysledne zrychleni ve vsech smerech?!?!*/
+			rotateV(&EstiGravity.Vect, deltaGyroAngle);
+						
+			/*zde pak podle STM dokumentu muzu spocitat uhly naklonu z rotacni matice a to asi takto*/
+			uhel[0] = atan2f(-EstiGravity.Vect.Y, EstiGravity.Vect.Z);
+  			uhel[1]= atan2f(-EstiGravity.Vect.X, sqrtf(EstiGravity.Vect.Y * EstiGravity.Vect.Y + EstiGravity.Vect.Z * EstiGravity.Vect.Z));
+
+			
+			/*Zde by melo dojit ke korekci driftu gyra a nezadoucih vibraci z akcelerometru*/
+			-Mahony a Cleanflight to delaji tedy pomoci P I regulatoru, kdezto napr baseflight tu stejnou vec dela pomoci komplemetraniho filtru?!?!?
+			- jestli ano - co je lepsi?
+			
+			
+			-nakonec by melo dojit k normalizovani zase k orotovani (podle baselight  -aùe to netusim proc) 
+			- a take k normalizaci  - proc se normalizuje? pokud nepouzivam aproximaci pro male uhly tak to je taky potreba?
+			
+			
+			- Takze
+			- po tomhle vsem uz mam zryhleni X,Y i Z v globalnich souradnicich, takze muzu delat dvojtou integraci pro vypocet drahy? (tedy po odecteni 1G z osy Z?)
+			
+
+}
+
+
+			
+void rotateV(struct fp_vector *vect, float *delta)
+{
+	struct fp_vector v_tmp = *vect;
+
+	// This does a  "proper" matrix rotation using gyro deltas without small-angle approximation
+	float mat[3][3];
+	float cosx, sinx, cosy, siny, cosz, sinz;
+	float coszcosx, sinzcosx, coszsinx, sinzsinx;
+
+	cosx = cosf(delta[0]);
+	sinx = sinf(delta[0]);
+	cosy = cosf(delta[1]);
+	siny = sinf(delta[1]);
+	cosz = cosf(delta[2]);
+	sinz = sinf(delta[2]);
+
+	coszcosx = cosz * cosx;
+	sinzcosx = sinz * cosx;
+	coszsinx = sinx * cosz;
+	sinzsinx = sinx * sinz;
+
+	mat[0][0] = cosz * cosy;
+	mat[0][1] = -cosy * sinz;
+	mat[0][2] = siny;
+	mat[1][0] = sinzcosx + (coszsinx * siny);
+	mat[1][1] = coszcosx - (sinzsinx * siny);
+	mat[1][2] = -sinx * cosy;
+	mat[2][0] = (sinzsinx) - (coszcosx * siny);
+	mat[2][1] = (coszsinx) + (sinzcosx * siny);
+	mat[2][2] = cosy * cosx;
+	
+	/* compute a new value of x,y,z, by previous x,y,z and rotation matrix*/
+	vect->X = v_tmp.X * mat[0][0] + v_tmp.Y * mat[1][0] + v_tmp.Z * mat[2][0];
+	vect->Y = v_tmp.X * mat[0][1] + v_tmp.Y * mat[1][1] + v_tmp.Z * mat[2][1];
+	vect->Z = v_tmp.X * mat[0][2] + v_tmp.Y * mat[1][2] + v_tmp.Z * mat[2][2];
+}
