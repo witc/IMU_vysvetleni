@@ -24,18 +24,18 @@ void IMU()
 	Vec3 accSmooth = filter(AccXYZ, accFilterState, dT);
 		
 	/* znam rychlost otaceni pro jednotlive osy (GyroXYZ) a dobu od posledniho mereni (dT), tuto zmenu potrebuji
-	     'pridat' do rotace R. Vlastne potrebuji uhlove rychlosti integrovat, ale prinejmensim matematicky neni 
-	     jednoduche (pokud jsem to pochopil, tak to souvisi s tim, ze se v prubehu rotace meni i souradny system
-	      ve kterem je rotace vydrena. Resit se to da, ale tady je to zbytecne)
-	   Pokud budu predpokladat, ze casovy krok (dT) je maly a goniometricke funkce nahradime linearni aproximaci,
-	   muzeme GyroXYZ prevest na rotaci a tou otocit R: */
-	// *** <1> ***
-	Quat gyroQ = {GyroXYZ / 2 * dT, 1}; // quaternion x,y,z,1 ; 
-		// 2 je proto, ze quaternion otaci o 2x theta (linearni aproximace sin)
-		// gyro bylo v rad/s, upravime na cas rotaci mezi samply (dT)
-		// 1 je aproximace cos(theta), predpokladame velmi maly uhel, normalizace vysledku to zachrani
+	     'pridat' do rotace R. Zmeny nejdou itegrovat primo, ale je mozne je prevest na derivaci R (pokud je R 
+	     quaternion).
+	     
+	     Somega = {0, GyroXYZ}; - doplneni na quaternion
+	     R' = 1/2 * R * Somega; - derivace quaternionu orientace - uz jde integrovat
 	
-	R = quat_mult(R, gyroQ);       // otocime orientaci o gyroQ
+	     Matematicky je to stejne, jako bych otocil R otocil o GyroXYZ * dT
+	 */
+	// *** <1> ***
+	Quat Somega = {0, GyroXYZ};   // doplneni na quaternion 
+	dR = 1/2 * quat_mult(R, sOmega) * dT;
+	R += dR;                      // integrujeme dR 
 	
 	// pokud by nedochazelo k chybam (mereni, zaokrouhlovani,aproximace), R by ted byla orientace v prostoru
 	// problem je, ze chyby se budou akumulovat - je treba je odstranit
@@ -59,10 +59,10 @@ void IMU()
 			
 		accErr *= accGain;
 			
-		// ted muzu z accErr vytvorit quaternion a pomoci toho opravit R(stejne jako pro signal gyra). 
+		// ted muzu z accErr vytvorit quaternion a pomoci toho opravit R(podobne jako pro signal gyra). 
 		// Ale accErr ma stejny format jako signal z gyra - smer udava osu otaceni, velikot se umerna uhlu.
 		// Navic accGain je maly (chci maly vliv Acc, aby poloha nereagovala na zrychleni zpusobena pilotem).
-		// - muzu si to zjednodusit - accErr prictu k GyroXYZ (v miste <1>) a rotaci provedu jen jednou.
+		// - muzu si to zjednodusit - accErr prictu k GyroXYZ (v miste <1>) a prevod a integraci provedu jen jednou.
 		<- <1>
 		GyroXYZ += accErr;
 		....
